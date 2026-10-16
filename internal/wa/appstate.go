@@ -40,6 +40,10 @@ func (c *Client) MuteChat(ctx context.Context, target types.JID, mute bool, dura
 	return c.sendAppStateWithBoundary(ctx, appstate.BuildMute(target, mute, duration), beforeApply)
 }
 
+func (c *Client) LabelChat(ctx context.Context, target types.JID, labelID string, labeled bool, beforeApply func()) ([]any, error) {
+	return c.sendAppStateWithBoundary(ctx, appstate.BuildLabelChat(target, labelID, labeled), beforeApply)
+}
+
 func (c *Client) MarkChatAsRead(ctx context.Context, target types.JID, read bool, lastMsgTS time.Time, lastMsgKey *waCommon.MessageKey, beforeApply func()) ([]any, error) {
 	return c.sendAppStateWithBoundary(ctx, appstate.BuildMarkChatAsRead(target, read, lastMsgTS, lastMsgKey), beforeApply)
 }

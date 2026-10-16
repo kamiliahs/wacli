@@ -582,6 +582,11 @@ func (f *fakeDelegatedChatStateApp) MuteChat(_ context.Context, chat types.JID, 
 	return nil
 }
 
+func (f *fakeDelegatedChatStateApp) LabelChat(_ context.Context, chat types.JID, labelID string, labeled bool) error {
+	f.calls <- fmt.Sprintf("label %s %s %t", chat, labelID, labeled)
+	return nil
+}
+
 func TestExecuteDelegatedChatStateRejectsUnknownActionBeforeAppUse(t *testing.T) {
 	fake := &fakeDelegatedChatStateApp{calls: make(chan string, 1)}
 	_, err := executeDelegatedChatState(context.Background(), fake, sendDelegateRequest{

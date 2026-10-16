@@ -78,6 +78,7 @@ type fakeWA struct {
 	archiveErr                  error
 	archiveCalls                []fakeArchiveCall
 	pinCalls                    []fakePinCall
+	labelCalls                  []fakeLabelCall
 	muteCalls                   []fakeMuteCall
 	markReadCalls               []fakeMarkReadCall
 	markReadBeforeApply         func()
@@ -103,6 +104,12 @@ type fakeArchiveCall struct {
 type fakePinCall struct {
 	target types.JID
 	pin    bool
+}
+
+type fakeLabelCall struct {
+	target  types.JID
+	labelID string
+	labeled bool
 }
 
 type fakeMuteCall struct {
@@ -809,6 +816,14 @@ func (f *fakeWA) PinChat(ctx context.Context, target types.JID, pin bool, before
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pinCalls = append(f.pinCalls, fakePinCall{target: target, pin: pin})
+	beforeApply()
+	return nil, nil
+}
+
+func (f *fakeWA) LabelChat(ctx context.Context, target types.JID, labelID string, labeled bool, beforeApply func()) ([]any, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.labelCalls = append(f.labelCalls, fakeLabelCall{target: target, labelID: labelID, labeled: labeled})
 	beforeApply()
 	return nil, nil
 }

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/openclaw/wacli/internal/app"
@@ -67,6 +68,7 @@ type sendDelegateRequest struct {
 	Read                 *bool    `json:"read,omitempty"`
 	Receipts             bool     `json:"receipts,omitempty"`
 	ChatStateAction      string   `json:"chat_state_action,omitempty"`
+	LabelID              string   `json:"label_id,omitempty"`
 	MuteDurationMS       int64    `json:"mute_duration_ms,omitempty"`
 	PostSendWaitMS       int64    `json:"post_send_wait_ms,omitempty"`
 	TimeoutMS            int64    `json:"timeout_ms,omitempty"`
@@ -402,6 +404,7 @@ type delegatedChatStateApp interface {
 	ArchiveChat(context.Context, types.JID, bool) error
 	PinChat(context.Context, types.JID, bool) error
 	MuteChat(context.Context, types.JID, bool, time.Duration) error
+	LabelChat(context.Context, types.JID, string, bool) error
 }
 
 func executeDelegatedChatState(ctx context.Context, a delegatedChatStateApp, req sendDelegateRequest) (sendDelegateResponse, error) {
@@ -415,6 +418,11 @@ func executeDelegatedChatState(ctx context.Context, a delegatedChatStateApp, req
 		run = func(jid types.JID) error { return a.MuteChat(ctx, jid, true, millisDuration(req.MuteDurationMS, 0)) }
 	case "unmute":
 		run = func(jid types.JID) error { return a.MuteChat(ctx, jid, false, 0) }
+	case "label", "unlabel":
+		if strings.TrimSpace(req.LabelID) == "" {
+			return sendDelegateResponse{}, fmt.Errorf("delegated %s needs a label id", req.ChatStateAction)
+		}
+		run = func(jid types.JID) error { return a.LabelChat(ctx, jid, req.LabelID, req.ChatStateAction == "label") }
 	default:
 		return sendDelegateResponse{}, fmt.Errorf("unsupported chat state action %q", req.ChatStateAction)
 	}

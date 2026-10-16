@@ -40,8 +40,37 @@ var schemaMigrations = []migration{
 	{version: 24, name: "app state recovery intents", up: migrateAppStateRecoveryIntents},
 	{version: 25, name: "message locations", up: migrateMessageLocations},
 	{version: 26, name: "message identity indexes and selective fts updates", up: migrateMessageIdentityIndexes},
-	{version: 27, name: "repair placeholder chat activity", up: migratePlaceholderChatActivity},
-	{version: 28, name: "unavailable app state keys", up: migrateUnavailableAppStateKeys},
+	{version: 27, name: "repair placeholder chat activity", up: migratePlaceholderChatActivity},    {version: 28, name: "unavailable app state keys", up: migrateUnavailableAppStateKeys},
+    {version: 29, name: "whatsapp labels", up: migrateLabels},
+}
+
+func migrateLabels(d *DB) error {
+    if _, err := d.sql.Exec(`
+        CREATE TABLE IF NOT EXISTS labels (
+            id TEXT NOT NULL PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            color INTEGER NOT NULL DEFAULT 0,
+            deleted INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+    `); err != nil {
+        return fmt.Errorf("create labels table: %w", err)
+    }
+    if _, err := d.sql.Exec(`
+        CREATE TABLE IF NOT EXISTS label_chats (
+            label_id TEXT NOT NULL,
+            chat_jid TEXT NOT NULL,
+            PRIMARY KEY (label_id, chat_jid)
+        );
+    `); err != nil {
+        return fmt.Errorf("create label_chats table: %w", err)
+    }
+    if _, err := d.sql.Exec(`
+        CREATE INDEX IF NOT EXISTS idx_label_chats_chat ON label_chats(chat_jid);
+    `); err != nil {
+        return fmt.Errorf("create label_chats index: %w", err)
+    }
+    return nil
 }
 
 func migratePlaceholderChatActivity(d *DB) error {
