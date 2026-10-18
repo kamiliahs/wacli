@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -31,11 +32,29 @@ type labelJSON struct {
 	Color int32  `json:"color"`
 }
 
-func writeLabelsJSON(list []labelJSON) error {
+// writeLabelsJSON keeps the envelope shape (data = label list) and adds
+// sync_error when the app-state refresh failed. Callers that only read data
+// keep working; the failure stops looking like an account without labels.
+func writeLabelsJSON(list []labelJSON, syncErr error) error {
 	if list == nil {
 		list = []labelJSON{}
 	}
-	return out.WriteJSON(os.Stdout, list)
+	if syncErr == nil {
+		return out.WriteJSON(os.Stdout, list)
+	}
+	msg := syncErr.Error()
+	payload, err := json.Marshal(map[string]any{
+		"success":    true,
+		"data":       list,
+		"error":      nil,
+		"sync_error": msg,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(os.Stderr, "warning: labels were not refreshed from WhatsApp:", msg)
+	_, err = fmt.Fprintln(os.Stdout, string(payload))
+	return err
 }
 
 func newLabelsListCmd(flags *rootFlags) *cobra.Command {
@@ -47,15 +66,18 @@ func newLabelsListCmd(flags *rootFlags) *cobra.Command {
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
 
-			labels, err := readLabels(ctx, flags, !noSync, func(a *app.App) (any, error) {
+			read, err := readLabels(ctx, flags, !noSync, func(a *app.App) (any, error) {
 				return a.ListLabels(ctx)
 			})
 			if err != nil {
 				return err
 			}
-			items, _ := labels.([]labelJSON)
+			items, _ := read.items.([]labelJSON)
 			if flags.asJSON {
-				return writeLabelsJSON(items)
+				return writeLabelsJSON(items, read.syncErr)
+			}
+			if read.syncErr != nil {
+				fmt.Fprintln(os.Stderr, "warning: labels were not refreshed from WhatsApp:", read.syncErr)
 			}
 			w := newTableWriter(os.Stdout)
 			fmt.Fprintln(w, "ID\tNAME\tCOLOR")
@@ -84,7 +106,7 @@ func newLabelsForChatCmd(flags *rootFlags) *cobra.Command {
 			ctx, cancel := withTimeout(context.Background(), flags)
 			defer cancel()
 
-			labels, err := readLabels(ctx, flags, !noSync, func(a *app.App) (any, error) {
+			read, err := readLabels(ctx, flags, !noSync, func(a *app.App) (any, error) {
 				jid, err := resolveRecipient(a, chat, recipientOptions{pick: pick, asJSON: flags.asJSON})
 				if err != nil {
 					return nil, err
@@ -94,9 +116,12 @@ func newLabelsForChatCmd(flags *rootFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			items, _ := labels.([]labelJSON)
+			items, _ := read.items.([]labelJSON)
 			if flags.asJSON {
-				return writeLabelsJSON(items)
+				return writeLabelsJSON(items, read.syncErr)
+			}
+			if read.syncErr != nil {
+				fmt.Fprintln(os.Stderr, "warning: labels were not refreshed from WhatsApp:", read.syncErr)
 			}
 			w := newTableWriter(os.Stdout)
 			fmt.Fprintln(w, "ID\tNAME\tCOLOR")
@@ -127,7 +152,7 @@ func newLabelsChatsCmd(flags *rootFlags) *cobra.Command {
 			defer cancel()
 
 			var chats []string
-			err := withLabelsApp(ctx, flags, !noSync, func(a *app.App) error {
+			syncErr, err := withLabelsApp(ctx, flags, !noSync, func(a *app.App) error {
 				var err error
 				chats, err = a.ChatsForLabel(ctx, label)
 				return err
@@ -138,8 +163,15 @@ func newLabelsChatsCmd(flags *rootFlags) *cobra.Command {
 			if chats == nil {
 				chats = []string{}
 			}
+			payload := map[string]any{"ok": true, "label": label, "chats": chats}
+			if syncErr != nil {
+				payload["sync_error"] = syncErr.Error()
+			}
 			if flags.asJSON {
-				return out.WriteJSON(os.Stdout, map[string]any{"ok": true, "label": label, "chats": chats})
+				return out.WriteJSON(os.Stdout, payload)
+			}
+			if syncErr != nil {
+				fmt.Fprintln(os.Stderr, "warning: labels were not refreshed from WhatsApp:", syncErr)
 			}
 			for _, chat := range chats {
 				fmt.Fprintln(os.Stdout, chat)
@@ -243,29 +275,38 @@ func writeLabelStateResult(flags *rootFlags, action, chat, label string) error {
 
 // withLabelsApp opens the app for a label read: online with a sync refresh
 // when requested and the store lock is free, read-only local otherwise.
-func withLabelsApp(ctx context.Context, flags *rootFlags, sync bool, run func(*app.App) error) error {
+// The refresh error comes back with the result (nil when it worked) so the
+// caller can tell an empty account from a failed sync.
+func withLabelsApp(ctx context.Context, flags *rootFlags, sync bool, run func(*app.App) error) (syncErr, err error) {
 	if sync {
-		if a, lk, err := newApp(ctx, flags, true, false); err == nil {
+		if a, lk, openErr := newApp(ctx, flags, true, false); openErr == nil {
 			online := false
 			defer closeApp(a, lk)
-			if err := a.EnsureAuthed(ctx); err == nil {
-				if err := a.Connect(ctx, false, nil); err == nil {
+			if authErr := a.EnsureAuthed(ctx); authErr == nil {
+				if connErr := a.Connect(ctx, false, nil); connErr == nil {
 					defer a.WA().Disconnect()
-					a.SyncLabels(ctx)
+					syncErr = a.SyncLabels(ctx)
 					online = true
 				}
 			}
 			if online {
-				return run(a)
+				return syncErr, run(a)
 			}
 		}
 	}
 	a, lk, err := newApp(ctx, flags, false, false)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer closeApp(a, lk)
-	return run(a)
+	return nil, run(a)
+}
+
+// labelRead is the result of a label query plus the app-state refresh error:
+// the refresh is best effort, but its failure must not look like "no labels".
+type labelRead struct {
+	items   any
+	syncErr error
 }
 
 // normalizeLabelRows converts store rows to the CLI JSON shape.
@@ -282,18 +323,19 @@ func normalizeLabelRows(rows any) []labelJSON {
 }
 
 // readLabels runs a label query through withLabelsApp and normalizes rows.
-func readLabels(ctx context.Context, flags *rootFlags, sync bool, query func(*app.App) (any, error)) (any, error) {
-	var out any
-	err := withLabelsApp(ctx, flags, sync, func(a *app.App) error {
+func readLabels(ctx context.Context, flags *rootFlags, sync bool, query func(*app.App) (any, error)) (labelRead, error) {
+	read := labelRead{}
+	syncErr, err := withLabelsApp(ctx, flags, sync, func(a *app.App) error {
 		rows, err := query(a)
 		if err != nil {
 			return err
 		}
-		out = normalizeLabelRows(rows)
+		read.items = normalizeLabelRows(rows)
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return labelRead{}, err
 	}
-	return out, nil
+	read.syncErr = syncErr
+	return read, nil
 }

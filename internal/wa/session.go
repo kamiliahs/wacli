@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/openclaw/wacli/internal/sqliteutil"
@@ -44,7 +45,13 @@ func (c *Client) init() (err error) {
 		}
 	}
 
-	logger := newWhatsmeowLogger("Client", "ERROR", os.Stderr)
+	// El nivel se puede subir con WACLI_WA_LOG (p. ej. "INFO") para ver
+	// los pedidos de claves de app state; por defecto solo errores.
+	level := strings.ToUpper(strings.TrimSpace(os.Getenv("WACLI_WA_LOG")))
+	if level == "" {
+		level = "ERROR"
+	}
+	logger := newWhatsmeowLogger("Client", level, os.Stderr)
 	c.client = whatsmeow.NewClient(deviceStore, logger)
 	// FetchAppStateEvents fails closed without this: recovery snapshots must
 	// return every mutation so wacli can rebuild its own database.

@@ -44,13 +44,17 @@ func (a *App) LabelChat(ctx context.Context, jid types.JID, labelID string, labe
 }
 
 // SyncLabels pulls the regular collection so label reads see definitions
-// and associations created on other devices. Best effort: a failed fetch
-// never fails the read, which falls back to local rows. Call it only on a
-// connected app; the plain List/LabelsForChat/ChatsForLabel readers below
-// stay local so they also work on a read-only store while sync runs.
-func (a *App) SyncLabels(ctx context.Context) {
+// and associations created on other devices. A failed fetch never fails
+// the read, which falls back to local rows, but the reason travels back to
+// the caller: an empty label list caused by a broken sync looks exactly
+// like "the phone has no labels", and callers (the bot's trigger) cannot
+// tell them apart otherwise. Call it only on a connected app; the plain
+// List/LabelsForChat/ChatsForLabel readers below stay local so they also
+// work on a read-only store while sync runs.
+func (a *App) SyncLabels(ctx context.Context) error {
 	tracker := &appStatePersistenceTracker{}
-	_, _ = a.fetchAndPersistAppState(ctx, appstate.WAPatchRegular, true, tracker)
+	fetchErr, persistenceErr := a.fetchAndPersistAppState(ctx, appstate.WAPatchRegular, true, tracker)
+	return errors.Join(fetchErr, persistenceErr)
 }
 
 // ListLabels returns known labels from the local store.
